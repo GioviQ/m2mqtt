@@ -49,7 +49,7 @@ namespace uPLibrary.Networking.M2Mqtt
         private bool secure;
 
         // CA certificate (on client)
-        private X509Certificate caCert;
+        private X509Certificate caCert; //used only if (MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3). Why?
         // Server certificate(on broker)
         private X509Certificate serverCert;
 
@@ -247,7 +247,7 @@ namespace uPLibrary.Networking.M2Mqtt
                     MqttSslUtility.ToSslPlatformEnum(this.sslProtocol));
 #else
                 this.sslStream.AuthenticateAsClient(this.remoteHostName,
-                    null,
+                    null, //why is null here and not  new X509Certificate[] { this.caCert }?
                     MqttSslUtility.ToSslPlatformEnum(this.sslProtocol),
                     false);
                 
