@@ -247,7 +247,7 @@ namespace uPLibrary.Networking.M2Mqtt
                     MqttSslUtility.ToSslPlatformEnum(this.sslProtocol));
 #else
                 this.sslStream.AuthenticateAsClient(this.remoteHostName,
-                    null,
+                    new X509CertificateCollection(new X509Certificate[] { this.caCert }),
                     MqttSslUtility.ToSslPlatformEnum(this.sslProtocol),
                     false);
                 
