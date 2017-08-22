@@ -50,11 +50,16 @@ namespace uPLibrary.Networking.M2Mqtt
 
         // CA certificate (on client)
         private X509Certificate caCert;
-        // Server certificate(on broker)
+        // Server certificate (on broker)
         private X509Certificate serverCert;
+        // client certificate (on client)
+        private X509Certificate clientCert;
 
         // SSL/TLS protocol version
         private MqttSslProtocols sslProtocol;
+
+        // Connection timeout for ssl authentication
+        private int connectTimeout;
 
         /// <summary>
         /// Remote host name
@@ -110,7 +115,7 @@ namespace uPLibrary.Networking.M2Mqtt
         /// <param name="socket">Socket opened with the client</param>
         public MqttNetworkChannel(Socket socket)
 #if !(MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3 || COMPACT_FRAMEWORK)
-            : this(socket, false, null, MqttSslProtocols.None, null, null)
+            : this(socket, false, null, MqttSslProtocols.None, 0, null, null)
 #else
             : this(socket, false, null, MqttSslProtocols.None)
 #endif
@@ -128,7 +133,7 @@ namespace uPLibrary.Networking.M2Mqtt
 #if !(MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3 || COMPACT_FRAMEWORK)
         /// <param name="userCertificateSelectionCallback">A RemoteCertificateValidationCallback delegate responsible for validating the certificate supplied by the remote party</param>
         /// <param name="userCertificateValidationCallback">A LocalCertificateSelectionCallback delegate responsible for selecting the certificate used for authentication</param>
-        public MqttNetworkChannel(Socket socket, bool secure, X509Certificate serverCert, MqttSslProtocols sslProtocol,
+        public MqttNetworkChannel(Socket socket, bool secure, X509Certificate serverCert, MqttSslProtocols sslProtocol, int connectTimeout,
             RemoteCertificateValidationCallback userCertificateValidationCallback,
             LocalCertificateSelectionCallback userCertificateSelectionCallback)
 #else
@@ -139,6 +144,7 @@ namespace uPLibrary.Networking.M2Mqtt
             this.secure = secure;
             this.serverCert = serverCert;
             this.sslProtocol = sslProtocol;
+            this.connectTimeout = connectTimeout;
 #if !(MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3 || COMPACT_FRAMEWORK)
             this.userCertificateValidationCallback = userCertificateValidationCallback;
             this.userCertificateSelectionCallback = userCertificateSelectionCallback;
@@ -152,9 +158,9 @@ namespace uPLibrary.Networking.M2Mqtt
         /// <param name="remotePort">Remote port</param>
         public MqttNetworkChannel(string remoteHostName, int remotePort)
 #if !(MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3 || COMPACT_FRAMEWORK)
-            : this(remoteHostName, remotePort, false, null, MqttSslProtocols.None, null, null)
+            : this(remoteHostName, remotePort, false, null, null, MqttSslProtocols.None, 0, null, null)
 #else
-            : this(remoteHostName, remotePort, false, null, MqttSslProtocols.None)
+            : this(remoteHostName, remotePort, false, null, null, MqttSslProtocols.None)
 #endif
         {
         }
@@ -166,15 +172,16 @@ namespace uPLibrary.Networking.M2Mqtt
         /// <param name="remotePort">Remote port</param>
         /// <param name="secure">Using SSL</param>
         /// <param name="caCert">CA certificate</param>
+        /// <param name="clientCert">Client certificate</param>
         /// <param name="sslProtocol">SSL/TLS protocol version</param>
 #if !(MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3 || COMPACT_FRAMEWORK)
         /// <param name="userCertificateSelectionCallback">A RemoteCertificateValidationCallback delegate responsible for validating the certificate supplied by the remote party</param>
         /// <param name="userCertificateValidationCallback">A LocalCertificateSelectionCallback delegate responsible for selecting the certificate used for authentication</param>
-        public MqttNetworkChannel(string remoteHostName, int remotePort, bool secure, X509Certificate caCert, MqttSslProtocols sslProtocol,
+        public MqttNetworkChannel(string remoteHostName, int remotePort, bool secure, X509Certificate caCert, X509Certificate clientCert, MqttSslProtocols sslProtocol, int connectTimeout,
             RemoteCertificateValidationCallback userCertificateValidationCallback,
             LocalCertificateSelectionCallback userCertificateSelectionCallback)
 #else
-        public MqttNetworkChannel(string remoteHostName, int remotePort, bool secure, X509Certificate caCert, MqttSslProtocols sslProtocol)
+        public MqttNetworkChannel(string remoteHostName, int remotePort, bool secure, X509Certificate caCert, X509Certificate clientCert, MqttSslProtocols sslProtocol)
 #endif
         {
             IPAddress remoteIpAddress = null;
@@ -210,7 +217,9 @@ namespace uPLibrary.Networking.M2Mqtt
             this.remotePort = remotePort;
             this.secure = secure;
             this.caCert = caCert;
+            this.clientCert = clientCert;
             this.sslProtocol = sslProtocol;
+            this.connectTimeout = connectTimeout;
 #if !(MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3 || COMPACT_FRAMEWORK)
             this.userCertificateValidationCallback = userCertificateValidationCallback;
             this.userCertificateSelectionCallback = userCertificateSelectionCallback;
@@ -241,16 +250,50 @@ namespace uPLibrary.Networking.M2Mqtt
                 // server authentication (SSL/TLS handshake)
 #if (MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3)
                 this.sslStream.AuthenticateAsClient(this.remoteHostName,
-                    null,
+                    this.clientCert,
                     new X509Certificate[] { this.caCert },
                     SslVerification.CertificateRequired,
                     MqttSslUtility.ToSslPlatformEnum(this.sslProtocol));
 #else
-                this.sslStream.AuthenticateAsClient(this.remoteHostName,
-                    new X509CertificateCollection(new X509Certificate[] { this.caCert }),
+                X509CertificateCollection clientCertificates = null;
+                // check if there is a client certificate to add to the collection, otherwise it's null (as empty)
+                if (this.clientCert != null)
+                    clientCertificates = new X509CertificateCollection(new X509Certificate[] { this.clientCert });
+
+                IAsyncResult result = null;
+                try
+                {
+                    result = this.sslStream.BeginAuthenticateAsClient(this.remoteHostName,
+                    clientCertificates,
                     MqttSslUtility.ToSslPlatformEnum(this.sslProtocol),
-                    false);
-                
+                    false,
+                    null,
+                    null);
+                    if (!result.AsyncWaitHandle.WaitOne(this.connectTimeout))
+                    {
+                        throw new Exception(string.Format("Timeout in SSL Authentication. connectTimeout={0}", connectTimeout));
+                    }
+                    this.sslStream.EndAuthenticateAsClient(result);
+                    if (!this.sslStream.IsAuthenticated || !this.sslStream.CanRead)
+                    {
+                        throw new Exception("Authentication error.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (this.sslStream.CanRead)
+                    {
+                        this.sslStream.Close();
+                    }
+                    throw;
+                }
+                finally
+                {
+                    if (result != null)
+                    {
+                        result.AsyncWaitHandle.Close();
+                    }
+                }
 #endif
             }
 #endif
